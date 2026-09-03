@@ -390,100 +390,79 @@ if uploaded_speed_files:
         
         # 呼叫地圖渲染函式
         render_map_area(df_final)
+
+
+
+
+
+        # ---------------------------------------------------------
+        # 新修正：多日期/多時間篩選與 Excel 匯出模組 (安全數字排序版)
+        # ---------------------------------------------------------
+        st.markdown("---")
+        st.subheader("📥 多時段加權平均速度與 LOS 報表匯出")
         
-        
-# ---------------------------------------------------------
-# 6. 【新增功能】指定日期與時段之路段平均速度統計
-# ---------------------------------------------------------
-st.markdown("---")
-st.markdown("### 🕒 指定日期與時段之路段加權平均速度分析")
-if 'df_final' in locals() and df_final is not None and not df_final.empty:
-    # 建立橫向排版：左邊選日期，右邊選時間
-    col_d1, col_d2 = st.columns(2)
-    
-    with col_d1:
-        all_date_options = sorted([str(d) for d in df_final['日期'].dropna().unique().tolist()])
-        selected_target_date = st.selectbox("請選擇要分析的日期", all_date_options, key="target_date_speed_analysis")
-        
-    with col_d2:
-        # 根據所選的日期，動態篩選出該日期有哪些可用時間
-        df_date_filtered = df_final[df_final['日期'].astype(str) == selected_target_date]
-        all_time_options = sorted(df_date_filtered['時間'].astype(str).unique().tolist())
-        selected_target_time = st.selectbox("請選擇要分析的時間點", all_time_options, key="target_time_speed_analysis")
-    
-    # 同時依據「日期」與「時間」精準篩選出資料
-    df_datetime_filtered = df_date_filtered[df_date_filtered['時間'].astype(str) == selected_target_time].copy()
-    
-    if not df_datetime_filtered.empty:
-        weighted_speed_results = []
-        
-        # 依照 路線 與 方向 進行分組計算
-        for (route, direction), group in df_datetime_filtered.groupby(['路線', '方向']):
-            # 依照里程點排序並計算各區段長度
-            df_sorted = group.sort_values('里程點').copy()
-            df_sorted['區段長度'] = df_sorted['里程點'].diff().fillna(df_sorted['里程點'])
-            df_sorted['區段長度'] = df_sorted['區段長度'].apply(lambda x: x if x > 0 else 0.0)
+        with st.expander("⚙️ 點此展開多時段篩選設定", expanded=True):
+            col_ex1, col_ex2 = st.columns(2)
             
-            # 總里程直接取該路線最大里程點（即最後一筆的累積距離，如 1060.41）
-            total_dist = df_sorted['里程點'].max()
-            
-            if total_dist > 0:
-                # 里程加權平均速度公式: sum(區段長度 * 速度) / 總累積里程
-                weighted_avg_speed = (df_sorted['速度'] * df_sorted['區段長度']).sum() / total_dist
-            else:
-                weighted_avg_speed = df_sorted['速度'].mean()
+            with col_ex1:
+                def natural_sort_key(s):
+                    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
                 
-            weighted_speed_results.append({
-                '路線': route,
-                '方向': direction,
-                '分析日期': selected_target_date,
-                '分析時間': selected_target_time,
-                '總里程(m)': round(total_dist, 2),
-                '加權平均速度(km/h)': round(weighted_avg_speed, 2)
-            })
+                all_dates_list = sorted(df_final['日期'].dropna().unique().tolist(), key=natural_sort_key)
+                selected_export_dates = st.multiselect(
+                    "選擇要匯出的日期 (可多選)", 
+                    options=all_dates_list, 
+                    default=all_dates_list[:1] if all_dates_list else [],
+                    key="export_dates"
+                )
+                
+            with col_ex2:
+                all_times_list = sorted(
+                    df_final['時間'].astype(str).unique().tolist(), 
+                    key=lambda x: datetime.strptime(x, '%H:%M') if ':' in x else x
+                )
+                selected_export_times = st.multiselect(
+                    "選擇要匯出的時間 (可多選，例如 09:00, 10:00, 11:00...)", 
+                    options=all_times_list,
+                    default=all_times_list[:3] if len(all_times_list) >= 3 else all_times_list,
+                    key="export_times"
+                )
+
+        if selected_export_dates and selected_export_times:
+            export_filtered_df = df_final[
+                df_final['日期'].astype(str).isin(selected_export_dates) & 
+                df_final['時間'].astype(str).isin(selected_export_times)
+            ]
             
-        df_speed_summary = pd.DataFrame(weighted_speed_results)
-        
-        # --- 利用正則表達式萃取數字進行數值排序 ---
-        import re
-        def extract_num(val):
-            match = re.search(r'\d+', str(val))
-            return int(match.group()) if match else 0
-            
-        df_speed_summary['__temp_sort'] = df_speed_summary['路線'].apply(extract_num)
-        df_speed_summary = df_speed_summary.sort_values(['__temp_sort', '方向']).drop(columns=['__temp_sort']).reset_index(drop=True)
-        # ----------------------------------------------------
-        
-        # 呈現表格
-        st.subheader(f"📋 {selected_target_date} {selected_target_time} 各路段加權平均速度報表")
-        st.dataframe(df_speed_summary, use_container_width=True)
-        
-        # 呈現長條圖視覺化
-        st.subheader("📊 各路段平均速度比較圖")
-        if not df_speed_summary.empty:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            
-            # 組合「路線 (方向)」作為圖表 X 軸標籤
-            df_speed_summary['路段標籤'] = df_speed_summary['路線'] + " (" + df_speed_summary['方向'] + ")"
-            
-            bars = ax.bar(df_speed_summary['路段標籤'], df_speed_summary['加權平均速度(km/h)'], color='#469b2a', alpha=0.8)
-            ax.set_xlabel("route", fontsize=16)
-            ax.set_ylabel("km/h", fontsize=16)
-            ax.set_title(f"{selected_target_date} - {selected_target_time}", fontsize=16, fontweight='bold')
-            plt.xticks(rotation=30, ha='right')
-            
-            # 在長條上方標示數值
-            for bar in bars:
-                height = bar.get_height()
-                ax.annotate(f'{height}',
-                            xy=(bar.get_x() + bar.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom', fontsize=10)
-                            
-            plt.tight_layout()
-            st.pyplot(fig)
-    else:
-        st.warning("⚠️ 該日期與時間點查無對應的車速資料。")
-else:
-    st.info("ℹ️ 請先於上方上傳並載入速度檔案，才可進行此時段速度分析。")
+            if not export_filtered_df.empty:
+                export_summary = export_filtered_df.groupby(
+                    ['路線', '方向', '日期', '時間']
+                ).apply(calculate_weighted_los).reset_index()
+                
+                # 💡 安全排序法：抓出路線名稱中的數字轉成整數排（例如 Route 2 -> 2, Route 10 -> 10）
+                export_summary['route_num'] = export_summary['路線'].astype(str).str.extract(r'(\d+)').astype(float).fillna(0)
+                export_summary = export_summary.sort_values(
+                    ['route_num', '路線', '方向', '日期', '時間']
+                ).drop(columns=['route_num']).reset_index(drop=True)
+                
+                styled_export_summary = export_summary.style.map(style_los_column, subset=['全段LOS'])
+                
+                st.write(f"📊 預計匯出報表預覽 (共 {len(export_summary)} 筆資料)：")
+                st.dataframe(styled_export_summary, use_container_width=True, height=400)
+                
+                from io import BytesIO
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    export_summary.to_excel(writer, index=False, sheet_name='多時段加權速度與LOS報表')
+                excel_data = output.getvalue()
+                
+                st.download_button(
+                    label="📥 下載所選時段加權平均速度 Excel 報表",
+                    data=excel_data,
+                    file_name=f"多時段路段加權速度與LOS報表_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.warning("⚠️ 在您選擇的日期與時間交叉組合中查無對應資料，請重新調整篩選條件。")
+        else:
+            st.info("💡 請至少選擇一個「日期」與一個「時間」以產生匯出報表。")
