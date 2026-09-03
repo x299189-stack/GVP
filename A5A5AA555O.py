@@ -393,35 +393,42 @@ if uploaded_speed_files:
         
         
 # ---------------------------------------------------------
-# 6. 【新增功能】指定時段之路段平均速度統計
+# 6. 【新增功能】指定日期與時段之路段平均速度統計
 # ---------------------------------------------------------
 st.markdown("---")
-st.markdown("###  指定時段之路段加權平均速度分析")
-
+st.markdown("### 🕒 指定日期與時段之路段加權平均速度分析")
 if 'df_final' in locals() and df_final is not None and not df_final.empty:
-    # 取得所有可用時間選項
-    all_time_options = sorted(df_final['時間'].astype(str).unique().tolist())
+    # 建立橫向排版：左邊選日期，右邊選時間
+    col_d1, col_d2 = st.columns(2)
     
-    # 建立介面元件：選擇時間
-    selected_target_time = st.selectbox("請選擇要分析的時間點", all_time_options, key="target_time_speed_analysis")
+    with col_d1:
+        all_date_options = sorted([str(d) for d in df_final['日期'].dropna().unique().tolist()])
+        selected_target_date = st.selectbox("請選擇要分析的日期", all_date_options, key="target_date_speed_analysis")
+        
+    with col_d2:
+        # 根據所選的日期，動態篩選出該日期有哪些可用時間
+        df_date_filtered = df_final[df_final['日期'].astype(str) == selected_target_date]
+        all_time_options = sorted(df_date_filtered['時間'].astype(str).unique().tolist())
+        selected_target_time = st.selectbox("請選擇要分析的時間點", all_time_options, key="target_time_speed_analysis")
     
-    # 篩選出該時間點的資料
-    df_time_filtered = df_final[df_final['時間'].astype(str) == selected_target_time].copy()
+    # 同時依據「日期」與「時間」精準篩選出資料
+    df_datetime_filtered = df_date_filtered[df_date_filtered['時間'].astype(str) == selected_target_time].copy()
     
-    if not df_time_filtered.empty:
+    if not df_datetime_filtered.empty:
         weighted_speed_results = []
         
         # 依照 路線 與 方向 進行分組計算
-        for (route, direction), group in df_time_filtered.groupby(['路線', '方向']):
+        for (route, direction), group in df_datetime_filtered.groupby(['路線', '方向']):
             # 依照里程點排序並計算各區段長度
             df_sorted = group.sort_values('里程點').copy()
             df_sorted['區段長度'] = df_sorted['里程點'].diff().fillna(df_sorted['里程點'])
-            df_sorted['區段長度'] = df_sorted['區段長度'].apply(lambda x: x if x > 0 else 1.0)
+            df_sorted['區段長度'] = df_sorted['區段長度'].apply(lambda x: x if x > 0 else 0.0)
             
-            total_dist = df_sorted['區段長度'].sum()
+            # 總里程直接取該路線最大里程點（即最後一筆的累積距離，如 1060.41）
+            total_dist = df_sorted['里程點'].max()
             
             if total_dist > 0:
-                # 里程加權平均速度公式: sum(區段長度 * 速度) / 總里程
+                # 里程加權平均速度公式: sum(區段長度 * 速度) / 總累積里程
                 weighted_avg_speed = (df_sorted['速度'] * df_sorted['區段長度']).sum() / total_dist
             else:
                 weighted_avg_speed = df_sorted['速度'].mean()
@@ -429,6 +436,7 @@ if 'df_final' in locals() and df_final is not None and not df_final.empty:
             weighted_speed_results.append({
                 '路線': route,
                 '方向': direction,
+                '分析日期': selected_target_date,
                 '分析時間': selected_target_time,
                 '總里程(m)': round(total_dist, 2),
                 '加權平均速度(km/h)': round(weighted_avg_speed, 2)
@@ -436,7 +444,7 @@ if 'df_final' in locals() and df_final is not None and not df_final.empty:
             
         df_speed_summary = pd.DataFrame(weighted_speed_results)
         
-        # --- 加上這段：利用正則表達式萃取數字進行數值排序 ---
+        # --- 利用正則表達式萃取數字進行數值排序 ---
         import re
         def extract_num(val):
             match = re.search(r'\d+', str(val))
@@ -447,7 +455,7 @@ if 'df_final' in locals() and df_final is not None and not df_final.empty:
         # ----------------------------------------------------
         
         # 呈現表格
-        st.subheader(f"📋 {selected_target_time} 各路段加權平均速度報表")
+        st.subheader(f"📋 {selected_target_date} {selected_target_time} 各路段加權平均速度報表")
         st.dataframe(df_speed_summary, use_container_width=True)
         
         # 呈現長條圖視覺化
@@ -461,7 +469,7 @@ if 'df_final' in locals() and df_final is not None and not df_final.empty:
             bars = ax.bar(df_speed_summary['路段標籤'], df_speed_summary['加權平均速度(km/h)'], color='#469b2a', alpha=0.8)
             ax.set_xlabel("route", fontsize=16)
             ax.set_ylabel("km/h", fontsize=16)
-            ax.set_title(f" {selected_target_time}", fontsize=16, fontweight='bold')
+            ax.set_title(f"{selected_target_date} - {selected_target_time}", fontsize=16, fontweight='bold')
             plt.xticks(rotation=30, ha='right')
             
             # 在長條上方標示數值
@@ -476,6 +484,6 @@ if 'df_final' in locals() and df_final is not None and not df_final.empty:
             plt.tight_layout()
             st.pyplot(fig)
     else:
-        st.warning("⚠️ 該時間點查無對應的車速資料。")
+        st.warning("⚠️ 該日期與時間點查無對應的車速資料。")
 else:
     st.info("ℹ️ 請先於上方上傳並載入速度檔案，才可進行此時段速度分析。")
